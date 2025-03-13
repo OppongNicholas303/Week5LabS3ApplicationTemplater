@@ -74,31 +74,32 @@ Resources:
                 Resource: !Sub "arn:aws:s3:::${S3BucketName}/*"
 
   # ECS Task Definition
-  ECSTaskDefinition:
+  TaskDefinition:
     Type: AWS::ECS::TaskDefinition
     Properties:
       Family: MyECSTask
+      Cpu: "256"
+      Memory: "512"
+      NetworkMode: awsvpc
       RequiresCompatibilities:
         - FARGATE
-      Cpu: "512"
-      Memory: "1024"
-      NetworkMode: awsvpc
-      ExecutionRoleArn: !GetAtt ECSTaskExecutionRole.Arn
-      TaskRoleArn: !GetAtt ECSTaskExecutionRole.Arn
+      ExecutionRoleArn: !GetAtt ECSExecutionRole.Arn
+      TaskRoleArn: !GetAtt ECSExecutionRole.Arn
       ContainerDefinitions:
-        - Name: my-container
+        - Name: MySpringApp
           Image: !Ref ECRRepositoryUri
-          Essential: true
           PortMappings:
-            - ContainerPort: 80
+            - ContainerPort: 3000
           Environment:
-            - Name: S3_BUCKET
+            - Name: AWS_S3_BUCKET_NAME
               Value: !Ref S3BucketName
+            - Name: AWS_REGION
+              Value: !Ref AWSRegion
           LogConfiguration:
             LogDriver: awslogs
             Options:
-              awslogs-group: /ecs/my-ecs-service
-              awslogs-region: !Ref AWS::Region
+              awslogs-group: /ecs/MySpringApp
+              awslogs-region: !Ref AWSRegion
               awslogs-stream-prefix: ecs
 
   # ECS Service with Auto Scaling
