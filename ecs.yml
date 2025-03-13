@@ -1,0 +1,202 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'ECS Fargate Service with ALB, Auto Scaling, and S3 Access'
+
+Parameters:
+  VPCId:
+    Type: AWS::EC2::VPC::Id
+    Description: The existing VPC ID
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet::Id
+    Description: Public Subnet 1 for ALB
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet::Id
+    Description: Public Subnet 2 for ALB
+
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet::Id
+    Description: Private Subnet 1 for ECS
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet::Id
+    Description: Private Subnet 2 for ECS
+
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Security group for ALB
+
+  ECSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Security group for ECS tasks
+
+  ALBListenerArn:
+    Type: String
+    Description: The ARN of the ALB Listener
+
+  ECSClusterName:
+    Type: String
+    Default: MyECSCluster
+    Description: Name of the existing ECS Cluster
+
+  ECRRepositoryUri:
+    Type: String
+    Description: URI of the ECR repository
+
+  S3BucketName:
+    Type: String
+    Description: S3 bucket name for file storage
+
+Resources:
+  # ECS Task Execution Role
+  ECSTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: ECSTaskExecutionRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: S3AccessPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource: !Sub "arn:aws:s3:::${S3BucketName}/*"
+
+  # ECS Task Definition
+  ECSTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: MyECSTask
+      RequiresCompatibilities:
+        - FARGATE
+      Cpu: "512"
+      Memory: "1024"
+      NetworkMode: awsvpc
+      ExecutionRoleArn: !GetAtt ECSTaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt ECSTaskExecutionRole.Arn
+      ContainerDefinitions:
+        - Name: my-container
+          Image: !Ref ECRRepositoryUri
+          Essential: true
+          PortMappings:
+            - ContainerPort: 80
+          Environment:
+            - Name: S3_BUCKET
+              Value: !Ref S3BucketName
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: /ecs/my-ecs-service
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+
+  # ECS Service with Auto Scaling
+  ECSService:
+    Type: AWS::ECS::Service
+    Properties:
+      Cluster: !Ref ECSClusterName
+      LaunchType: FARGATE
+      TaskDefinition: !Ref ECSTaskDefinition
+      DesiredCount: 2
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          Subnets:
+            - !Ref PrivateSubnet1
+            - !Ref PrivateSubnet2
+          SecurityGroups:
+            - !Ref ECSSecurityGroup
+      LoadBalancers:
+        - TargetGroupArn: !Ref ALBTargetGroup
+          ContainerName: my-container
+          ContainerPort: 80
+
+  # Auto Scaling Target
+  ECSAutoScalingTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      MaxCapacity: 5
+      MinCapacity: 2
+      ResourceId: !Sub "service/${ECSClusterName}/${ECSService}"
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+      RoleARN: !GetAtt ECSAutoScalingRole.Arn
+
+  # Auto Scaling Policy - Scale Out
+  ECSScaleOutPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: ECSScaleOutPolicy
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref ECSAutoScalingTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 60
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+        ScaleOutCooldown: 60
+        ScaleInCooldown: 60
+
+  # Auto Scaling Policy - Scale In
+  ECSScaleInPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: ECSScaleInPolicy
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref ECSAutoScalingTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 30
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+        ScaleOutCooldown: 60
+        ScaleInCooldown: 60
+
+  # ALB Target Group
+  ALBTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Ref VPCId
+      Protocol: HTTP
+      Port: 80
+      TargetType: ip
+      HealthCheckPath: "/health"
+      Matcher:
+        HttpCode: "200-299"
+      HealthCheckIntervalSeconds: 30
+      HealthyThresholdCount: 3
+      UnhealthyThresholdCount: 3
+      Subnets:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+
+  # ALB Listener Rule
+  ALBListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref ALBListenerArn
+      Priority: 1
+      Conditions:
+        - Field: path-pattern
+          Values: [ "/*" ]
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref ALBTargetGroup
+
+Outputs:
+  ECSServiceName:
+    Description: Name of the ECS Service
+    Value: !Ref ECSService
+
+  ALBEndpoint:
+    Description: ALB DNS Name
+    Value: !GetAtt ALBTargetGroup.LoadBalancerArns
