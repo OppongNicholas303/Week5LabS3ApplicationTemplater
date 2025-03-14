@@ -75,9 +75,6 @@ Resources:
   # ECS Service
   ECSService:
     Type: AWS::ECS::Service
-    DependsOn: 
-      - CodeDeployApplication
-      - CodeDeployServiceRole
     Properties:
       ServiceName: week5-lab-SService-nicholas
       Cluster: !ImportValue ecs-base-stack-nicholas-ClusterName
@@ -102,24 +99,17 @@ Resources:
   # CodeDeploy Deployment Group
   CodeDeployDeploymentGroup:
     Type: AWS::CodeDeploy::DeploymentGroup
-    DependsOn: 
-      - ECSService
-      - CodeDeployApplication
-      - CodeDeployServiceRole
     Properties:
       ApplicationName: !Ref CodeDeployApplication
       DeploymentGroupName: Week5LabDeploymentGroup
       DeploymentConfigName: CodeDeployDefault.ECSAllAtOnce
       ServiceRoleArn: !GetAtt CodeDeployServiceRole.Arn
-      
       DeploymentStyle:
         DeploymentType: BLUE_GREEN
         DeploymentOption: WITH_TRAFFIC_CONTROL
-      
       ECSServices:
         - ClusterName: !ImportValue ecs-base-stack-nicholas-ClusterName
-          ServiceName: !GetAtt ECSService.Name
-
+          ServiceName: !Ref ECSService
       LoadBalancerInfo:
         TargetGroupPairInfo:
           ProdTrafficRoute:
@@ -131,7 +121,6 @@ Resources:
   # Auto Scaling Target
   ECSAutoScalingTarget:
     Type: AWS::ApplicationAutoScaling::ScalableTarget
-    DependsOn: ECSService
     Properties:
       MaxCapacity: 5
       MinCapacity: 2
@@ -139,7 +128,7 @@ Resources:
         - '/'
         - - service
           - !ImportValue ecs-base-stack-nicholas-ClusterName
-          - !GetAtt ECSService.Name
+          - !Ref ECSService
       ScalableDimension: ecs:service:DesiredCount
       ServiceNamespace: ecs
       RoleARN: !ImportValue ecs-base-stack-nicholas-ECSAutoScalingRoleArn
@@ -183,7 +172,7 @@ Parameters:
 Outputs:
   ServiceName:
     Description: The name of the ECS service
-    Value: !GetAtt ECSService.Name
+    Value: !Ref ECSService
     Export:
       Name: !Sub "${AWS::StackName}-ServiceName"
 
