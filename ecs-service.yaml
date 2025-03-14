@@ -45,7 +45,7 @@ Resources:
   ECSService:
     Type: AWS::ECS::Service
     Properties:
-      ServiceName: week5-lab-SService-nicholas
+      ServiceName: !Sub "${ECSServiceName}"
       Cluster: !ImportValue Production-CLUSTER-NAME
       TaskDefinition: !Ref TaskDefinition
       LaunchType: FARGATE
@@ -69,7 +69,7 @@ Resources:
   CodeDeployApplication:
     Type: AWS::CodeDeploy::Application
     Properties:
-      ApplicationName: Week5LabECSApp
+      ApplicationName: !Sub "${CodeDeployAppName}"
       ComputePlatform: ECS
 
   # CodeDeploy Deployment Group
@@ -77,7 +77,7 @@ Resources:
     Type: AWS::CodeDeploy::DeploymentGroup
     Properties:
       ApplicationName: !Ref CodeDeployApplication
-      DeploymentGroupName: Week5LabDeploymentGroup
+      DeploymentGroupName: !Sub "${CodeDeployGroupName}"
       DeploymentConfigName: CodeDeployDefault.ECSAllAtOnce
       ServiceRoleArn: !GetAtt CodeDeployServiceRole.Arn
       
@@ -119,15 +119,30 @@ Parameters:
     Description: AWS Region for deployment
     Default: "us-east-1"
 
+  ECSServiceName:
+    Type: String
+    Description: Name of the ECS Service
+    Default: "week5_lab_service_nicholas"
+
+  CodeDeployAppName:
+    Type: String
+    Description: Name of the CodeDeploy Application
+    Default: "week5_lab_codedeploy_app"
+
+  CodeDeployGroupName:
+    Type: String
+    Description: Name of the CodeDeploy Deployment Group
+    Default: "week5_lab_deployment_group"
+
 Outputs:
   ServiceName:
     Description: The name of the ECS service
     Value: !GetAtt ECSService.Name
     Export:
-      Name: Nicholas-ServiceName
+      Name: Nicholas_ServiceName
 
   ServiceUrl:
     Description: URL of the load balancer for the sample service
-    Value: !Sub http://${Production-ALB-DNS-NAME}
+    Value: !Sub http://${ProductionALBDNSName}
     Export:
-      Name: Nicholas-ServiceUrl
+      Name: Nicholas_ServiceUrl
