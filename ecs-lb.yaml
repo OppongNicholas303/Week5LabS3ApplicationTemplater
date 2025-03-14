@@ -1,0 +1,134 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Load Balancer & Target Groups Stack'
+
+# ecs-lb.yaml
+Resources:
+  # Target Groups for Blue/Green Deployment
+  BlueTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: week5-target-group-blue
+      VpcId: !Ref VPCId
+      Protocol: HTTP
+      Port: 3000
+      TargetType: ip
+      HealthCheckPath: "/health"
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+
+  GreenTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: week5-target-group-green
+      VpcId: !Ref VPCId
+      Protocol: HTTP
+      Port: 3000
+      TargetType: ip
+      HealthCheckPath: "/health"
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+
+  # Security Groups
+  ECSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for ECS tasks
+      VpcId: !Ref VPCId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3000
+          ToPort: 3000
+          CidrIp: 0.0.0.0/0
+
+  # Application Load Balancer
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: week5-alb-nicholas
+      Subnets:
+        - !Ref Subnet1
+        - !Ref Subnet2
+      SecurityGroups:
+        - !Ref ECSSecurityGroup
+      Scheme: internet-facing
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: '60'
+
+  # ALB Listener
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Protocol: HTTP
+      Port: 80
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref BlueTargetGroup
+
+Parameters:
+  VPCId:
+    Type: AWS::EC2::VPC::Id
+    Description: The existing VPC ID
+
+  Subnet1:
+    Type: AWS::EC2::Subnet::Id
+    Description: Public Subnet 1 for ALB
+
+  Subnet2:
+    Type: AWS::EC2::Subnet::Id
+    Description: Public Subnet 2 for ALB
+
+Outputs:
+  BlueTargetGroupArn:
+    Description: The ARN of the Blue target group
+    Value: !Ref BlueTargetGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-BlueTargetGroupArn"
+
+  GreenTargetGroupArn:
+    Description: The ARN of the Green target group
+    Value: !Ref GreenTargetGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-GreenTargetGroupArn"
+
+  ECSSecurityGroupId:
+    Description: The ID of the ECS security group
+    Value: !Ref ECSSecurityGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-ECSSecurityGroupId"
+
+  LoadBalancerArn:
+    Description: The ARN of the ALB
+    Value: !Ref ApplicationLoadBalancer
+    Export:
+      Name: !Sub "${AWS::StackName}-LoadBalancerArn"
+
+  LoadBalancerDNS:
+    Description: The DNS name of the ALB
+    Value: !GetAtt ApplicationLoadBalancer.DNSName
+    Export:
+      Name: !Sub "${AWS::StackName}-LoadBalancerDNS"
+
+  ListenerArn:
+    Description: The ARN of the ALB listener
+    Value: !Ref ALBListener
+    Export:
+      Name: !Sub "${AWS::StackName}-ListenerArn"
+
+  BlueTargetGroupName:
+    Description: The name of the Blue target group
+    Value: !GetAtt BlueTargetGroup.TargetGroupName
+    Export:
+      Name: !Sub "${AWS::StackName}-BlueTargetGroupName"
+
+  GreenTargetGroupName:
+    Description: The name of the Green target group
+    Value: !GetAtt GreenTargetGroup.TargetGroupName
+    Export:
+      Name: !Sub "${AWS::StackName}-GreenTargetGroupName"
+

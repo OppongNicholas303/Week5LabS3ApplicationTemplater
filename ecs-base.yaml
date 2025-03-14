@@ -1,0 +1,86 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Base ECS Infrastructure Stack'
+
+# ecs-base.yaml
+Resources:
+  # ECS Cluster
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: Week5-lab-cluster-nicholas
+
+  # CloudWatch Logs Group
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/MySpringApp
+      RetentionInDays: 30
+
+  # IAM Roles
+  ECSExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "ECSExecutionRole-${AWS::StackName}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: S3AccessPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource: !Sub "arn:aws:s3:::${S3Bucket}/*"
+
+  # Auto Scaling Role
+  ECSAutoScalingRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: application-autoscaling.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceAutoscaleRole'
+
+Parameters:
+  S3Bucket:
+    Type: String
+    Description: S3 bucket name for file storage
+
+Outputs:
+  ClusterName:
+    Description: The name of the ECS cluster
+    Value: !Ref ECSCluster
+    Export:
+      Name: !Sub "${AWS::StackName}-ClusterName"
+
+  LogGroupName:
+    Description: The name of the CloudWatch Logs group
+    Value: !Ref LogGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-LogGroupName"
+
+  ECSExecutionRoleArn:
+    Description: The ARN of the ECS execution role
+    Value: !GetAtt ECSExecutionRole.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-ECSExecutionRoleArn"
+
+  ECSAutoScalingRoleArn:
+    Description: The ARN of the Auto Scaling role
+    Value: !GetAtt ECSAutoScalingRole.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-ECSAutoScalingRoleArn"
