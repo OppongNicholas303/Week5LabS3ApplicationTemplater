@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'ECS Fargate Service with ALB, Auto Scaling, and S3 Access'
+Description: 'ECS Fargate Service with ALB, Auto Scaling, S3 Access, and Blue/Green Deployment'
 
 Parameters:
   VPCId:
@@ -46,13 +46,17 @@ Parameters:
   S3BucketName:
     Type: String
     Description: S3 bucket name for file storage
+    
+  AWSRegion:
+    Type: String
+    Description: AWS Region for resources
 
 Resources:
   # ECS Task Execution Role
-  ECSTaskExecutionRole:
+  ECSExecutionRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: ECSTaskExecutionRole
+      RoleName: !Sub "${AWS::StackName}-ECSExecutionRole"
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -71,13 +75,46 @@ Resources:
                 Action:
                   - s3:GetObject
                   - s3:PutObject
-                Resource: !Sub "arn:aws:s3:::${S3BucketName}/*"
+                  - s3:ListBucket
+                Resource: 
+                  - !Sub "arn:aws:s3:::${S3BucketName}"
+                  - !Sub "arn:aws:s3:::${S3BucketName}/*"
+
+  # ECS Auto Scaling Role
+  ECSAutoScalingRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-ECSAutoScalingRole"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: application-autoscaling.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceAutoscaleRole
+
+  # CodeDeploy Role for Blue/Green Deployment
+  CodeDeployServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-CodeDeployServiceRole"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codedeploy.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AWSCodeDeployRoleForECS
 
   # ECS Task Definition
-  TaskDefinition:
+  ECSTaskDefinition:
     Type: AWS::ECS::TaskDefinition
     Properties:
-      Family: MyECSTask
+      Family: !Sub "${AWS::StackName}-task"
       Cpu: "256"
       Memory: "512"
       NetworkMode: awsvpc
@@ -86,10 +123,13 @@ Resources:
       ExecutionRoleArn: !GetAtt ECSExecutionRole.Arn
       TaskRoleArn: !GetAtt ECSExecutionRole.Arn
       ContainerDefinitions:
-        - Name: MySpringApp
+        - Name: my-container
           Image: !Ref ECRRepositoryUri
           PortMappings:
-            - ContainerPort: 3000
+            - ContainerPort: 80
+              HostPort: 80
+              Protocol: tcp
+          Essential: true
           Environment:
             - Name: AWS_S3_BUCKET_NAME
               Value: !Ref S3BucketName
@@ -98,90 +138,72 @@ Resources:
           LogConfiguration:
             LogDriver: awslogs
             Options:
-              awslogs-group: /ecs/MySpringApp
+              awslogs-group: !Ref CloudWatchLogGroup
               awslogs-region: !Ref AWSRegion
               awslogs-stream-prefix: ecs
 
-  # ECS Service with Auto Scaling
-  ECSService:
-    Type: AWS::ECS::Service
+  # CloudWatch Log Group
+  CloudWatchLogGroup:
+    Type: AWS::Logs::LogGroup
     Properties:
-      Cluster: !Ref ECSClusterName
-      LaunchType: FARGATE
-      TaskDefinition: !Ref ECSTaskDefinition
-      DesiredCount: 2
-      NetworkConfiguration:
-        AwsvpcConfiguration:
-          AssignPublicIp: DISABLED
-          Subnets:
-            - !Ref PrivateSubnet1
-            - !Ref PrivateSubnet2
-          SecurityGroups:
-            - !Ref ECSSecurityGroup
-      LoadBalancers:
-        - TargetGroupArn: !Ref ALBTargetGroup
-          ContainerName: my-container
-          ContainerPort: 80
+      LogGroupName: !Sub "/ecs/${AWS::StackName}"
+      RetentionInDays: 30
 
-  # Auto Scaling Target
-  ECSAutoScalingTarget:
-    Type: AWS::ApplicationAutoScaling::ScalableTarget
+  # Create ECS Cluster if it doesn't exist
+  ECSCluster:
+    Type: AWS::ECS::Cluster
     Properties:
-      MaxCapacity: 5
-      MinCapacity: 2
-      ResourceId: !Sub "service/${ECSClusterName}/${ECSService}"
-      ScalableDimension: ecs:service:DesiredCount
-      ServiceNamespace: ecs
-      RoleARN: !GetAtt ECSAutoScalingRole.Arn
+      ClusterName: !Ref ECSClusterName
 
-  # Auto Scaling Policy - Scale Out
-  ECSScaleOutPolicy:
-    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+  # Create S3 Bucket if it doesn't exist
+  S3Bucket:
+    Type: AWS::S3::Bucket
     Properties:
-      PolicyName: ECSScaleOutPolicy
-      PolicyType: TargetTrackingScaling
-      ScalingTargetId: !Ref ECSAutoScalingTarget
-      TargetTrackingScalingPolicyConfiguration:
-        TargetValue: 60
-        PredefinedMetricSpecification:
-          PredefinedMetricType: ECSServiceAverageCPUUtilization
-        ScaleOutCooldown: 60
-        ScaleInCooldown: 60
+      BucketName: !Ref S3BucketName
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders:
+              - "*"
+            AllowedMethods:
+              - GET
+              - PUT
+              - POST
+              - DELETE
+              - HEAD
+            AllowedOrigins:
+              - "*"
+            MaxAge: 3000
 
-  # Auto Scaling Policy - Scale In
-  ECSScaleInPolicy:
-    Type: AWS::ApplicationAutoScaling::ScalingPolicy
-    Properties:
-      PolicyName: ECSScaleInPolicy
-      PolicyType: TargetTrackingScaling
-      ScalingTargetId: !Ref ECSAutoScalingTarget
-      TargetTrackingScalingPolicyConfiguration:
-        TargetValue: 30
-        PredefinedMetricSpecification:
-          PredefinedMetricType: ECSServiceAverageCPUUtilization
-        ScaleOutCooldown: 60
-        ScaleInCooldown: 60
-
-  # ALB Target Group
-  ALBTargetGroup:
+  # Production Target Group (Blue)
+  ProductionTargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
+      Name: !Sub "${AWS::StackName}-blue-tg"
       VpcId: !Ref VPCId
       Protocol: HTTP
       Port: 80
       TargetType: ip
       HealthCheckPath: "/health"
-      Matcher:
-        HttpCode: "200-299"
       HealthCheckIntervalSeconds: 30
       HealthyThresholdCount: 3
       UnhealthyThresholdCount: 3
-      Subnets:
-        - !Ref PrivateSubnet1
-        - !Ref PrivateSubnet2
 
-  # ALB Listener Rule
-  ALBListenerRule:
+  # Test Target Group (Green)
+  TestTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${AWS::StackName}-green-tg"
+      VpcId: !Ref VPCId
+      Protocol: HTTP
+      Port: 80
+      TargetType: ip
+      HealthCheckPath: "/health"
+      HealthCheckIntervalSeconds: 30
+      HealthyThresholdCount: 3
+      UnhealthyThresholdCount: 3
+
+  # Production Listener Rule (for Blue/Green traffic routing)
+  ProductionListenerRule:
     Type: AWS::ElasticLoadBalancingV2::ListenerRule
     Properties:
       ListenerArn: !Ref ALBListenerArn
@@ -191,13 +213,133 @@ Resources:
           Values: [ "/*" ]
       Actions:
         - Type: forward
-          TargetGroupArn: !Ref ALBTargetGroup
+          TargetGroupArn: !Ref ProductionTargetGroup
+
+  # Test Listener (for testing green deployment)
+  TestListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 8080
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TestTargetGroup
+
+  # Application Load Balancer (Reference)
+  ApplicationLoadBalancer:
+    Type: String
+    DependsOn: ProductionListenerRule
+    Value: !Select [0, !Split ['/', !Select [1, !Split [':', !Ref ALBListenerArn]]]]
+
+  # ECS Service with CodeDeploy Blue/Green Deployment
+  ECSService:
+    Type: AWS::ECS::Service
+    DependsOn: ProductionListenerRule
+    Properties:
+      ServiceName: !Sub "${AWS::StackName}-service"
+      Cluster: !Ref ECSCluster
+      LaunchType: FARGATE
+      TaskDefinition: !Ref ECSTaskDefinition
+      DesiredCount: 2
+      DeploymentController:
+        Type: CODE_DEPLOY
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          Subnets:
+            - !Ref PrivateSubnet1
+            - !Ref PrivateSubnet2
+          SecurityGroups:
+            - !Ref ECSSecurityGroup
+      LoadBalancers:
+        - TargetGroupArn: !Ref ProductionTargetGroup
+          ContainerName: my-container
+          ContainerPort: 80
+
+  # AWS CodeDeploy Application
+  CodeDeployApplication:
+    Type: AWS::CodeDeploy::Application
+    Properties:
+      ApplicationName: !Sub "${AWS::StackName}-deploy-app"
+      ComputePlatform: ECS
+
+  # AWS CodeDeploy Deployment Group
+  CodeDeployDeploymentGroup:
+    Type: AWS::CodeDeploy::DeploymentGroup
+    Properties:
+      ApplicationName: !Ref CodeDeployApplication
+      DeploymentGroupName: !Sub "${AWS::StackName}-deploy-group"
+      DeploymentConfigName: CodeDeployDefault.ECSAllAtOnce
+      ServiceRoleArn: !GetAtt CodeDeployServiceRole.Arn
+      BlueGreenDeploymentConfiguration:
+        DeploymentReadyOption:
+          ActionOnTimeout: CONTINUE_DEPLOYMENT
+          WaitTimeInMinutes: 0
+        TerminateBlueInstancesOnDeploymentSuccess:
+          Action: TERMINATE
+          TerminationWaitTimeInMinutes: 1
+      ECSServices:
+        - ClusterName: !Ref ECSClusterName
+          ServiceName: !GetAtt ECSService.Name
+      LoadBalancerInfo:
+        TargetGroupPairInfoList:
+          - ProdTrafficRoute:
+              ListenerArns:
+                - !Ref ALBListenerArn
+            TestTrafficRoute:
+              ListenerArns:
+                - !Ref TestListener
+            TargetGroups:
+              - Name: !GetAtt ProductionTargetGroup.TargetGroupName
+              - Name: !GetAtt TestTargetGroup.TargetGroupName
+
+  # Auto Scaling Target
+  ECSAutoScalingTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      MaxCapacity: 5
+      MinCapacity: 2
+      ResourceId: !Sub "service/${ECSClusterName}/${ECSService.Name}"
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+      RoleARN: !GetAtt ECSAutoScalingRole.Arn
+
+  # Auto Scaling Policy - CPU
+  ECSCPUScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: CPUScalingPolicy
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref ECSAutoScalingTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 70
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+        ScaleOutCooldown: 60
+        ScaleInCooldown: 60
 
 Outputs:
   ECSServiceName:
     Description: Name of the ECS Service
-    Value: !Ref ECSService
+    Value: !GetAtt ECSService.Name
 
-  ALBEndpoint:
-    Description: ALB DNS Name
-    Value: !GetAtt ALBTargetGroup.LoadBalancerArns
+  ProductionTargetGroupName:
+    Description: Name of the Production Target Group
+    Value: !GetAtt ProductionTargetGroup.TargetGroupName
+
+  TestTargetGroupName:
+    Description: Name of the Test Target Group
+    Value: !GetAtt TestTargetGroup.TargetGroupName
+
+  CodeDeployApplicationName:
+    Description: Name of the CodeDeploy Application
+    Value: !Ref CodeDeployApplication
+
+  CodeDeployDeploymentGroupName:
+    Description: Name of the CodeDeploy Deployment Group
+    Value: !Ref CodeDeployDeploymentGroup
+
+  S3BucketURL:
+    Description: URL of the S3 Bucket
+    Value: !Sub "https://${S3BucketName}.s3.amazonaws.com"
