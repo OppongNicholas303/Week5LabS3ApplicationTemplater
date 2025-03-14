@@ -94,19 +94,17 @@ Resources:
           ProdTrafficRoute:
             ListenerArn: !ImportValue Production-ALB-LISTENER-ARN
           TargetGroups:
-            - Name: !Sub Production-Blue-TG
-            - Name: !Sub Production-Green-TG
+            - Name: Production-Blue-TG
+            - Name: Production-Green-TG
 
 Parameters:
   Subnet1:
     Type: AWS::EC2::Subnet::Id
     Description: Private Subnet 1 for ECS service
-    Default: !ImportValue Production-PRIVATE-SUBNET1
 
   Subnet2:
     Type: AWS::EC2::Subnet::Id
     Description: Private Subnet 2 for ECS service
-    Default: !ImportValue Production-PRIVATE-SUBNET2
 
   ECRRepositoryUri:
     Type: String
@@ -119,7 +117,7 @@ Parameters:
   AWSRegion:
     Type: String
     Description: AWS Region for deployment
-    Default: us-east-1
+    Default: "us-east-1"
 
 Outputs:
   ServiceName:
