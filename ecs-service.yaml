@@ -1,41 +1,8 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: 'ECS Service & Deployment Stack'
 
-# ecs-service.yaml
 Resources:
-  # ECS Task Definition
-  TaskDefinition:
-    Type: AWS::ECS::TaskDefinition
-    Properties:
-      Family: week5-lab-task-nicholas
-      Cpu: '256'
-      Memory: '512'
-      NetworkMode: awsvpc
-      RequiresCompatibilities:
-        - FARGATE
-      ExecutionRoleArn: !ImportValue ecs-base-stack-nicholas-ECSExecutionRoleArn
-      TaskRoleArn: !ImportValue ecs-base-stack-nicholas-ECSExecutionRoleArn
-      ContainerDefinitions:
-        - Name: app-container
-          Image: !Ref ECRRepositoryUri
-          Essential: true
-          PortMappings:
-            - ContainerPort: 3000
-              HostPort: 3000
-              Protocol: tcp
-          Environment:
-            - Name: AWS_S3_BUCKET_NAME
-              Value: !Ref S3Bucket
-            - Name: AWS_REGION
-              Value: !Ref AWSRegion
-          LogConfiguration:
-            LogDriver: awslogs
-            Options:
-              awslogs-group: !ImportValue ecs-base-stack-nicholas-LogGroupName
-              awslogs-region: !Ref AWSRegion
-              awslogs-stream-prefix: ecs
-
-  # CodeDeploy Service Role
+  # IAM Role for CodeDeploy
   CodeDeployServiceRole:
     Type: AWS::IAM::Role
     Properties:
@@ -50,12 +17,36 @@ Resources:
       ManagedPolicyArns:
         - 'arn:aws:iam::aws:policy/AWSCodeDeployRoleForECS'
 
+  # ECS Task Definition
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: week5-lab-task-nicholas
+      Cpu: '256'
+      Memory: '512'
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      ContainerDefinitions:
+        - Name: app-container
+          Image: !Ref ECRRepositoryUri
+          Essential: true
+          PortMappings:
+            - ContainerPort: 3000
+              HostPort: 3000
+              Protocol: tcp
+          Environment:
+            - Name: AWS_S3_BUCKET_NAME
+              Value: !Ref S3Bucket
+            - Name: AWS_REGION
+              Value: !Ref AWSRegion
+
   # ECS Service
   ECSService:
     Type: AWS::ECS::Service
     Properties:
       ServiceName: week5-lab-SService-nicholas
-      Cluster: !ImportValue ecs-base-stack-nicholas-ClusterName
+      Cluster: !ImportValue Production-CLUSTER-NAME
       TaskDefinition: !Ref TaskDefinition
       LaunchType: FARGATE
       DesiredCount: 2
@@ -68,9 +59,9 @@ Resources:
             - !Ref Subnet1
             - !Ref Subnet2
           SecurityGroups:
-            - !ImportValue ecs-lb-stack-nicholas-ECSSecurityGroupId
+            - !ImportValue Production-ECS-SG-ID
       LoadBalancers:
-        - TargetGroupArn: !ImportValue ecs-lb-stack-nicholas-BlueTargetGroupArn
+        - TargetGroupArn: !ImportValue Production-BLUE-TG-ARN
           ContainerName: app-container
           ContainerPort: 3000
 
@@ -84,68 +75,38 @@ Resources:
   # CodeDeploy Deployment Group
   CodeDeployDeploymentGroup:
     Type: AWS::CodeDeploy::DeploymentGroup
-    DependsOn: ECSService
     Properties:
       ApplicationName: !Ref CodeDeployApplication
       DeploymentGroupName: Week5LabDeploymentGroup
       DeploymentConfigName: CodeDeployDefault.ECSAllAtOnce
       ServiceRoleArn: !GetAtt CodeDeployServiceRole.Arn
-      BlueGreenDeploymentConfiguration:
-        DeploymentReadyOption:
-          ActionOnTimeout: CONTINUE_DEPLOYMENT
-          WaitTimeInMinutes: 0
-        TerminateBlueInstancesOnDeploymentSuccess:
-          Action: TERMINATE
-          TerminationWaitTimeInMinutes: 5
+      
+      DeploymentStyle:
+        DeploymentType: BLUE_GREEN
+        DeploymentOption: WITH_TRAFFIC_CONTROL
+      
       ECSServices:
-        - ClusterName: !ImportValue ecs-base-stack-nicholas-ClusterName
+        - ClusterName: !ImportValue Production-CLUSTER-NAME
           ServiceName: !GetAtt ECSService.Name
+
       LoadBalancerInfo:
-        TargetGroupPairInfoList:
-          - ProdTrafficRoute:
-              ListenerArns:
-                - !ImportValue ecs-lb-stack-nicholas-ListenerArn
-            TargetGroups:
-              - Name: !ImportValue ecs-lb-stack-nicholas-BlueTargetGroupName
-              - Name: !ImportValue ecs-lb-stack-nicholas-GreenTargetGroupName
-
-  # Auto Scaling Target
-  ECSAutoScalingTarget:
-    Type: AWS::ApplicationAutoScaling::ScalableTarget
-    Properties:
-      MaxCapacity: 5
-      MinCapacity: 2
-      ResourceId: !Join 
-        - '/'
-        - - service
-          - !ImportValue ecs-base-stack-nicholas-ClusterName
-          - !GetAtt ECSService.Name
-      ScalableDimension: ecs:service:DesiredCount
-      ServiceNamespace: ecs
-      RoleARN: !ImportValue ecs-base-stack-nicholas-ECSAutoScalingRoleArn
-
-  # Auto Scaling Policy
-  ECSScalingPolicy:
-    Type: AWS::ApplicationAutoScaling::ScalingPolicy
-    Properties:
-      PolicyName: ECSScalingPolicy
-      PolicyType: TargetTrackingScaling
-      ScalingTargetId: !Ref ECSAutoScalingTarget
-      TargetTrackingScalingPolicyConfiguration:
-        TargetValue: 70
-        PredefinedMetricSpecification:
-          PredefinedMetricType: ECSServiceAverageCPUUtilization
-        ScaleOutCooldown: 60
-        ScaleInCooldown: 60
+        TargetGroupPairInfo:
+          ProdTrafficRoute:
+            ListenerArn: !ImportValue Production-ALB-LISTENER-ARN
+          TargetGroups:
+            - Name: !Sub Production-Blue-TG
+            - Name: !Sub Production-Green-TG
 
 Parameters:
   Subnet1:
     Type: AWS::EC2::Subnet::Id
-    Description: Public Subnet 1 for ECS service
+    Description: Private Subnet 1 for ECS service
+    Default: !ImportValue Production-PRIVATE-SUBNET1
 
   Subnet2:
     Type: AWS::EC2::Subnet::Id
-    Description: Public Subnet 2 for ECS service
+    Description: Private Subnet 2 for ECS service
+    Default: !ImportValue Production-PRIVATE-SUBNET2
 
   ECRRepositoryUri:
     Type: String
@@ -165,28 +126,10 @@ Outputs:
     Description: The name of the ECS service
     Value: !GetAtt ECSService.Name
     Export:
-      Name: !Sub "${AWS::StackName}-ServiceName"
+      Name: Nicholas-ServiceName
 
   ServiceUrl:
     Description: URL of the load balancer for the sample service
-    Value: !Join ['', ['http://', !ImportValue ecs-lb-stack-nicholas-LoadBalancerDNS]]
+    Value: !Sub http://${Production-ALB-DNS-NAME}
     Export:
-      Name: !Sub "${AWS::StackName}-ServiceUrl"
-
-  TaskDefinition:
-    Description: The ARN of the created Task Definition
-    Value: !Ref TaskDefinition
-    Export:
-      Name: !Sub "${AWS::StackName}-TaskDefinition"
-
-  CodeDeployApplication:
-    Description: The CodeDeploy Application Name
-    Value: !Ref CodeDeployApplication
-    Export:
-      Name: !Sub "${AWS::StackName}-CodeDeployApplication"
-
-  CodeDeployDeploymentGroup:
-    Description: The CodeDeploy Deployment Group Name
-    Value: !Ref CodeDeployDeploymentGroup
-    Export:
-      Name: !Sub "${AWS::StackName}-DeploymentGroup"
+      Name: Nicholas-ServiceUrl
