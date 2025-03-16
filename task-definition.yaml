@@ -1,0 +1,106 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'ECS Task Definition & CodeDeploy Application Stack'
+
+Resources:
+  # IAM Role for CodeDeploy
+  CodeDeployServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "CodeDeployServiceRole-${AWS::StackName}"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codedeploy.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/AWSCodeDeployRoleForECS'
+      Policies:
+        - PolicyName: CodeDeployECSAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecs:DescribeServices
+                  - ecs:CreateTaskSet
+                  - ecs:UpdateServicePrimaryTaskSet
+                  - ecs:DeleteTaskSet
+                  - elasticloadbalancing:DescribeTargetGroups
+                  - elasticloadbalancing:DescribeRules
+                  - elasticloadbalancing:ModifyRule
+                Resource: '*'
+
+  # ECS Task Definition
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: week5-lab-task-nicholas
+      Cpu: '256'
+      Memory: '512'
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn: !ImportValue ecs-base-stack-nicholas-ECSExecutionRoleArn
+      TaskRoleArn: !ImportValue ecs-base-stack-nicholas-ECSExecutionRoleArn
+      ContainerDefinitions:
+        - Name: app-container
+          Image: !Ref ECRRepositoryUri
+          Essential: true
+          PortMappings:
+            - ContainerPort: 3000
+              HostPort: 3000
+              Protocol: tcp
+          Environment:
+            - Name: AWS_S3_BUCKET_NAME
+              Value: !Ref S3Bucket
+            - Name: AWS_REGION
+              Value: !Ref AWSRegion
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !ImportValue ecs-base-stack-nicholas-LogGroupName
+              awslogs-region: !Ref AWSRegion
+              awslogs-stream-prefix: ecs
+              awslogs-create-group: 'true'
+
+  # CodeDeploy Application
+  CodeDeployApplication:
+    Type: AWS::CodeDeploy::Application
+    Properties:
+      ApplicationName: Week5LabECSApp
+      ComputePlatform: ECS
+
+Parameters:
+  ECRRepositoryUri:
+    Type: String
+    Description: URI of the ECR repository
+
+  S3Bucket:
+    Type: String
+    Description: S3 bucket name for file storage
+
+  AWSRegion:
+    Type: String
+    Description: AWS Region for deployment
+    Default: us-east-1
+
+Outputs:
+  TaskDefinitionArn:
+    Description: The ARN of the created Task Definition
+    Value: !Ref TaskDefinition
+    Export:
+      Name: !Sub "${AWS::StackName}-TaskDefinitionArn"
+
+  CodeDeployApplicationName:
+    Description: The CodeDeploy Application Name
+    Value: !Ref CodeDeployApplication
+    Export:
+      Name: !Sub "${AWS::StackName}-CodeDeployApplicationName"
+  
+  CodeDeployServiceRoleArn:
+    Description: The ARN of the CodeDeploy Service Role
+    Value: !GetAtt CodeDeployServiceRole.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-CodeDeployServiceRoleArn"

@@ -1,0 +1,32 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'CodeDeploy Deployment Group Stack'
+
+Resources:
+  # CodeDeploy Deployment Group
+  CodeDeployDeploymentGroup:
+    Type: AWS::CodeDeploy::DeploymentGroup
+    Properties:
+      ApplicationName: !ImportValue ecs-task-definition-stack-nicholas-CodeDeployApplicationName
+      DeploymentGroupName: Week5LabDeploymentGroup
+      DeploymentConfigName: CodeDeployDefault.ECSAllAtOnce
+      ServiceRoleArn: !ImportValue ecs-task-definition-stack-nicholas-CodeDeployServiceRoleArn
+      DeploymentStyle:
+        DeploymentType: BLUE_GREEN
+        DeploymentOption: WITH_TRAFFIC_CONTROL
+      ECSServices:
+        - ClusterName: !ImportValue ecs-base-stack-nicholas-ClusterName
+          ServiceName: !ImportValue ecs-service-stack-nicholas-ServiceName
+      LoadBalancerInfo:
+        TargetGroupPairInfo:
+          ProdTrafficRoute:
+            ListenerArn: !ImportValue ecs-lb-stack-nicholas-ListenerArn
+          TargetGroups:
+            - Name: !ImportValue ecs-lb-stack-nicholas-BlueTargetGroupName
+            - Name: !ImportValue ecs-lb-stack-nicholas-GreenTargetGroupName
+
+Outputs:
+  DeploymentGroupName:
+    Description: The CodeDeploy Deployment Group Name
+    Value: !Ref CodeDeployDeploymentGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-DeploymentGroupName"
